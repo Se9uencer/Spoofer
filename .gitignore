@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.spoofer.json
+.claude/
+*.out.log
+*.err.log

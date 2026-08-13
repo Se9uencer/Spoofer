@@ -1,0 +1,247 @@
+<title>Spoofer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+  #banner { padding: 10px 16px; font-weight: 600; color: #fff; }
+  #banner.active { background: #1b8a3a; }
+  #banner.reconnecting { background: #c47a00; }
+  #banner.inactive { background: #a33; }
+  #message { padding: 4px 16px; font-size: 13px; color: #555; min-height: 18px; }
+  #main { display: flex; flex: 1; min-height: 0; }
+  #map { flex: 1; }
+  #panel { width: 300px; padding: 12px; overflow-y: auto; border-left: 1px solid #ddd; }
+  #panel h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; color: #888; }
+  #searchResults { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow-y: auto; }
+  #searchResults li { padding: 6px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #eee; }
+  #searchResults li:hover { background: #f0f0f0; }
+  input[type=text], input[type=number] { width: 100%; padding: 6px; margin-bottom: 8px; }
+  .row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  button { cursor: pointer; padding: 8px; border: none; border-radius: 4px; background: #333; color: #fff; }
+  button.secondary { background: #999; }
+  #setBtn { width: 100%; background: #1b6fa3; margin-bottom: 6px; }
+  #clearBtn { width: 100%; }
+  #favorites { list-style: none; margin: 0; padding: 0; }
+  #favorites li { display: flex; margin-bottom: 4px; }
+  #favorites li button:first-child { flex: 1; text-align: left; background: #eee; color: #222; }
+  #favorites li button.delete { background: #c33; margin-left: 4px; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 14px 0; }
+</style>
+
+<div id="banner" class="inactive">loading…</div>
+<div id="message"></div>
+<div id="main">
+  <div id="map"></div>
+  <div id="panel">
+    <h3>Search</h3>
+    <input type="text" id="search" placeholder="Search for a place…">
+    <ul id="searchResults"></ul>
+
+    <h3>Mode</h3>
+    <div class="row">
+      <input type="checkbox" id="glideToggle">
+      <label for="glideToggle">Glide (walk there)</label>
+    </div>
+    <div class="row">
+      <label for="speed">Speed (m/s)</label>
+      <input type="number" id="speed" value="1.4" step="0.1" style="width:70px">
+    </div>
+    <button id="setBtn" disabled>Set Location</button>
+    <button id="clearBtn" class="secondary">Clear (real GPS)</button>
+
+    <hr>
+    <h3>Favorites</h3>
+    <ul id="favorites"></ul>
+    <div class="row">
+      <input type="text" id="favName" placeholder="Name this spot…">
+      <button id="saveFavBtn" class="secondary">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let map, targetMarker, originMarker;
+let target = null;
+let pendingOriginFor = null;
+
+// LAN mode: token arrives as ?token=… (bookmark / Add to Home Screen). Persist it.
+const _params = new URLSearchParams(location.search);
+const TOKEN = _params.get('token') || localStorage.getItem('spoofer_token') || '';
+if (_params.get('token')) localStorage.setItem('spoofer_token', _params.get('token'));
+
+function api(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {});
+  if (TOKEN) headers['X-Spoofer-Token'] = TOKEN;
+  // First page load already used ?token=; keep it on GETs as a belt-and-suspenders.
+  let url = path;
+  if (TOKEN && !path.includes('token=')) {
+    url += (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(TOKEN);
+  }
+  return fetch(url, Object.assign({}, opts, { headers }));
+}
+
+function init() {
+  map = L.map('map').setView([39.8, -98.5], 4);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  map.on('click', onMapClick);
+
+  document.getElementById('search').addEventListener('input', debounce(onSearch, 400));
+  document.getElementById('setBtn').addEventListener('click', doSet);
+  document.getElementById('clearBtn').addEventListener('click', doClear);
+  document.getElementById('saveFavBtn').addEventListener('click', saveFavorite);
+
+  refreshStatus();
+  refreshFavorites();
+  setInterval(refreshStatus, 3000);
+}
+
+function onMapClick(e) {
+  if (pendingOriginFor) {
+    const { target: t, mode, speed } = pendingOriginFor;
+    pendingOriginFor = null;
+    if (originMarker) map.removeLayer(originMarker);
+    originMarker = L.marker(e.latlng, { opacity: 0.5 }).addTo(map);
+    setMessage('Got your starting point — gliding…');
+    submitSet(t, mode, speed, { lat: e.latlng.lat, lon: e.latlng.lng });
+    return;
+  }
+  setTarget(e.latlng.lat, e.latlng.lng);
+}
+
+function setTarget(lat, lon) {
+  target = { lat, lon };
+  if (targetMarker) map.removeLayer(targetMarker);
+  targetMarker = L.marker([lat, lon]).addTo(map);
+  document.getElementById('setBtn').disabled = false;
+}
+
+async function onSearch() {
+  const q = document.getElementById('search').value.trim();
+  const resultsEl = document.getElementById('searchResults');
+  resultsEl.innerHTML = '';
+  if (q.length < 3) return;
+  const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5`);
+  const items = await res.json();
+  for (const item of items) {
+    const li = document.createElement('li');
+    li.textContent = item.display_name;
+    li.onclick = () => {
+      const lat = parseFloat(item.lat), lon = parseFloat(item.lon);
+      map.setView([lat, lon], 16);
+      setTarget(lat, lon);
+      resultsEl.innerHTML = '';
+      document.getElementById('search').value = item.display_name;
+    };
+    resultsEl.appendChild(li);
+  }
+}
+
+async function doSet() {
+  if (!target) return;
+  const glide = document.getElementById('glideToggle').checked;
+  const speed = parseFloat(document.getElementById('speed').value) || 1.4;
+  submitSet(target, glide ? 'glide' : 'teleport', speed, null);
+}
+
+async function submitSet(t, mode, speed, origin) {
+  const body = { lat: t.lat, lon: t.lon, mode, speed };
+  if (origin) { body.origin_lat = origin.lat; body.origin_lon = origin.lon; }
+  const res = await api('/api/set', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.status === 400) {
+    const err = await res.json();
+    if (mode === 'glide' && (err.detail || '').includes('origin')) {
+      pendingOriginFor = { target: t, mode, speed };
+      setMessage('Click your real current position on the map first.');
+      return;
+    }
+    alert(err.detail || 'failed to set location');
+    return;
+  }
+  setMessage('');
+  refreshStatus();
+}
+
+async function doClear() {
+  await api('/api/clear', { method: 'POST' });
+  refreshStatus();
+}
+
+async function refreshStatus() {
+  const res = await api('/api/status');
+  if (res.status === 401) {
+    document.getElementById('banner').textContent = 'UNAUTHORIZED — open the tokenized URL';
+    document.getElementById('banner').className = 'inactive';
+    return;
+  }
+  const s = await res.json();
+  const banner = document.getElementById('banner');
+  if (s.connection === 'reconnecting' && s.active) {
+    banner.textContent = `RECONNECTING — last ${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}`;
+    banner.className = 'reconnecting';
+  } else if (s.active) {
+    banner.textContent = `ACTIVE — ${s.lat.toFixed(5)}, ${s.lon.toFixed(5)} (${s.mode})`;
+    banner.className = 'active';
+  } else {
+    banner.textContent = 'INACTIVE — real GPS';
+    banner.className = 'inactive';
+  }
+}
+
+function setMessage(msg) {
+  document.getElementById('message').textContent = msg;
+}
+
+async function refreshFavorites() {
+  const res = await api('/api/favorites');
+  const favs = await res.json();
+  const list = document.getElementById('favorites');
+  list.innerHTML = '';
+  for (const f of favs) {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.textContent = f.name;
+    btn.onclick = () => {
+      map.setView([f.lat, f.lon], 16);
+      setTarget(f.lat, f.lon);
+    };
+    const del = document.createElement('button');
+    del.textContent = '×';
+    del.className = 'delete';
+    del.onclick = async () => {
+      await api(`/api/favorites/${encodeURIComponent(f.name)}`, { method: 'DELETE' });
+      refreshFavorites();
+    };
+    li.appendChild(btn);
+    li.appendChild(del);
+    list.appendChild(li);
+  }
+}
+
+async function saveFavorite() {
+  if (!target) { alert('click the map or search for a place first'); return; }
+  const name = document.getElementById('favName').value.trim();
+  if (!name) return;
+  await api('/api/favorites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, lat: target.lat, lon: target.lon })
+  });
+  document.getElementById('favName').value = '';
+  refreshFavorites();
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+init();
+</script>

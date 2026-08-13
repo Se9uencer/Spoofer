@@ -67,7 +67,7 @@ Done. After a Mac reboot you shouldn’t need to touch Terminal again.
 3. Search / tap the map → **Set Location**
 4. **Clear** when you’re done (or quit — it clears on exit)
 
-**Glide** = walk there slowly instead of teleporting. Use it for Life360 (see disclaimer) and to avoid Find My geofence “arrived/left” pings.
+**Glide** = walk/drive there at a chosen speed instead of teleporting. Use it for Life360 (see disclaimer) and to avoid Find My geofence “arrived/left” pings.
 
 ## If something breaks
 
@@ -95,7 +95,7 @@ Life360 **often works** if you:
 - don’t teleport, **or**
 - only teleport a **short** distance (usually under about a mile)
 
-For Life360, prefer **Glide** (walk-there mode) over a big instant jump. Long teleports are more likely to look wrong or update late — Life360 also checks things beyond GPS (Wi‑Fi/IP), which this tool cannot fake.
+For Life360, prefer **Glide** (walk/drive-there mode) over a big instant jump. Long teleports are more likely to look wrong or update late — Life360 also checks things beyond GPS (Wi‑Fi/IP), which this tool cannot fake.
 
 ## Limits (read these)
 

@@ -1,6 +1,6 @@
 # Spoofer
 
-Fake your iPhone’s GPS from a Mac (works with Find My; Life360 is hit-or-miss).
+Fake your iPhone’s GPS from a Mac. Find My usually follows it right away; Life360 is pickier (see disclaimer below).
 macOS only. Phone stays tethered to the Mac over USB or the same Wi‑Fi.
 
 Built on [`pymobiledevice3`](https://github.com/doronz88/pymobiledevice3).
@@ -67,7 +67,7 @@ Done. After a Mac reboot you shouldn’t need to touch Terminal again.
 3. Search / tap the map → **Set Location**
 4. **Clear** when you’re done (or quit — it clears on exit)
 
-**Glide** = walk there slowly instead of teleporting (better if someone has Find My geofences on you).
+**Glide** = walk there slowly instead of teleporting. Use it for Life360 (see disclaimer) and to avoid Find My geofence “arrived/left” pings.
 
 ## If something breaks
 
@@ -87,6 +87,15 @@ sudo "$HOME/Library/Application Support/pipx/venvs/pymobiledevice3/bin/pymobiled
 # Terminal 2
 uv run spoofer.py serve --lan
 ```
+
+## Life360 disclaimer
+
+Life360 **often works** if you:
+
+- don’t teleport, **or**
+- only teleport a **short** distance (usually under about a mile)
+
+For Life360, prefer **Glide** (walk-there mode) over a big instant jump. Long teleports are more likely to look wrong or update late — Life360 also checks things beyond GPS (Wi‑Fi/IP), which this tool cannot fake.
 
 ## Limits (read these)
 
